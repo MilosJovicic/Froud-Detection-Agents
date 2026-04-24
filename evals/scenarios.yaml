@@ -1,0 +1,16 @@
+scenarios:
+  - name: shared_device_ring
+    hypothesis: "Urgent review of a collusion ring where customers C1_1 and C1_2 appear to share the same device."
+    expected_claim_type: ring
+    expected_projection_id: shared_device_ring
+    expected_algorithm_id: wcc
+  - name: merchant_cochargeback
+    hypothesis: "Investigate a chargeback cluster of merchants sharing charged-back customers across M1 and M2."
+    expected_claim_type: chargeback
+    expected_projection_id: merchant_cochargeback
+    expected_algorithm_id: louvain
+  - name: decline_routing
+    hypothesis: "Investigate payment decline routing anomalies across acquirers and suspicious routing behavior."
+    expected_claim_type: routing
+    expected_projection_id: decline_routing
+    expected_algorithm_id: pagerank

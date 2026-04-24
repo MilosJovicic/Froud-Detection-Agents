@@ -1,0 +1,30 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "fraud-agent"
+version = "0.1.0"
+description = "Fraud Detection Agent with Graph Algorithms and LLM Reasoning"
+requires-python = ">=3.12"
+dependencies = [
+    "pydantic>=2.0",
+    "neo4j>=5.0",
+    "python-dotenv>=1.0",
+    "temporalio>=1.7.0",
+    "pydantic-ai>=0.0.14",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+asyncio_mode = "auto"
