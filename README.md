@@ -1,70 +1,201 @@
-# Fraud Detection Agent with Graph Algorithms and LLM Reasoning
+# Fraud Detection Agents
 
-A research artifact demonstrating fraud detection through the combination of graph algorithms, semantic verification, and lightweight LLM reasoning. Built for ICTAI submission with emphasis on correctness and reproducibility.
+<p align="center">
+  <img src="https://img.shields.io/badge/Python-3.12%2B-3776AB?logo=python&logoColor=white" alt="Python 3.12+">
+  <img src="https://img.shields.io/badge/Temporal-workflows-141414?logo=temporal&logoColor=white" alt="Temporal workflows">
+  <img src="https://img.shields.io/badge/Neo4j-GDS-4581C3?logo=neo4j&logoColor=white" alt="Neo4j GDS">
+  <img src="https://img.shields.io/badge/PydanticAI-agents-E92063" alt="PydanticAI agents">
+</p>
 
-## Overview
+Fraud Detection Agents is a Temporal-based research system for investigating
+fraud hypotheses with graph algorithms, deterministic verification, and
+LLM-assisted reasoning.
 
-This system investigates fraud hypotheses by:
+It turns an analyst's natural-language hypothesis into parallel Neo4j Graph Data
+Science investigations, checks the resulting structural claims with fixed Cypher
+probes, and returns a typed fraud verdict.
 
-1. **Routing**: Classifying the hypothesis into one of 6 fraud patterns (ring, chargeback, routing anomaly, entity similarity, money flow, custom)
-2. **Planning**: Selecting 1-3 appropriate graph projections and algorithms to explore
-3. **Execution**: Running the algorithms in parallel on Neo4j + GDS, interpreting results
-4. **Verification**: Double-checking claims with deterministic Cypher probes (CoVe-style)
-5. **Synthesis**: Aggregating evidence and producing an analyst-facing verdict
+## System At A Glance
 
-**Key Design**: The algorithm reasons, the LLM routes. Graph algorithms are primary; Qwen 3.5 4B handles classification and template-shaped summarization, never freeform Cypher composition.
+```mermaid
+flowchart LR
+    H[Analyst hypothesis] --> T[FraudInvestigationWorkflow]
 
-## Architecture
+    T --> R[RouterAgent]
+    R --> P[BranchPlannerAgent]
 
+    P --> B1[Reasoning branch 1]
+    P --> B2[Reasoning branch 2]
+    P --> B3[Reasoning branch 3]
+
+    B1 --> G[(Neo4j GDS)]
+    B2 --> G
+    B3 --> G
+
+    G --> V[Cypher verifiers]
+    V --> A[Evidence aggregation]
+    A --> S[SynthesizerAgent]
+    S --> F[FraudVerdict]
+
+    LLM[LLM agents with rule-based fallbacks] -. route, plan, interpret, summarize .-> R
+    LLM -. typed outputs .-> P
+    LLM -. bounded interpretation .-> S
 ```
-Hypothesis (analyst input)
-    ↓
-RouterAgent (classify into claim type)
-    ↓
-BranchPlannerAgent (select 1-3 investigation paths)
-    ↓
-[ReasoningBranchWorkflow] ×N (parallel)
-    ├─ ProjectGraph (Cypher projection)
-    ├─ RunAlgorithm (WCC/Louvain/PageRank/etc)
-    ├─ InterpreterAgent (→ StructuralClaim)
-    ├─ VerifyCypher (deterministic probe)
-    └─ DropProjection (cleanup)
-    ↓
-AggregationActivity (consensus + conflicts)
-    ↓
-SynthesizerAgent (analyst-facing verdict)
-    ↓
-FraudVerdict
+
+## Why This Architecture
+
+| Layer | Responsibility | Guardrail |
+| --- | --- | --- |
+| Temporal workflows | Durable orchestration and parallel branch execution | Activity timeouts, retries, child workflows |
+| Neo4j GDS | Fraud signal extraction from graph topology | Pre-registered projections and algorithms |
+| LLM agents | Routing, planning, interpretation, and summary text | Typed Pydantic outputs and rule-based fallbacks |
+| Cypher verifiers | Deterministic validation of structural claims | Fixed parameterized templates |
+
+The important design choice is that graph algorithms produce the evidence. The
+model selects from bounded catalogs and summarizes structured results; it does
+not freely write production Cypher during normal investigations.
+
+## Investigation Flow
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant Analyst
+    participant Client
+    participant Temporal
+    participant Agents
+    participant GDS as Neo4j GDS
+    participant Cypher as Cypher Verifiers
+
+    Analyst->>Client: Submit fraud hypothesis
+    Client->>Temporal: Start FraudInvestigationWorkflow
+    Temporal->>Agents: Classify claim type
+    Temporal->>Agents: Plan 1-3 investigation branches
+    loop For each planned branch
+        Temporal->>GDS: Project graph
+        Temporal->>GDS: Run graph algorithm
+        Temporal->>Agents: Interpret bounded result table
+        Temporal->>Cypher: Verify structural claim
+        Temporal->>GDS: Drop temporary projection
+    end
+    Temporal->>Temporal: Aggregate evidence
+    Temporal->>Agents: Synthesize verdict
+    Temporal-->>Client: FraudVerdict
+    Client-->>Analyst: Assessment, confidence, actions
 ```
 
-See [CLAUDE.md](CLAUDE.md) for detailed design principles, data contracts, and build order.
+## Fraud Signal Map
+
+```mermaid
+flowchart TB
+    H[Hypothesis] --> Ring[ring]
+    H --> Chargeback[chargeback]
+    H --> Routing[routing]
+    H --> Similarity[similarity]
+    H --> Money[money_flow]
+    H --> Custom[custom]
+
+    Ring --> D[shared_device_ring]
+    Ring --> C[shared_card_ring]
+    Ring --> IP[ip_cohort]
+
+    Chargeback --> MC[merchant_cochargeback]
+    Chargeback --> PC[payout_cluster]
+
+    Routing --> DR[decline_routing]
+    Routing --> MF[money_flow]
+
+    Similarity --> C
+    Similarity --> D
+    Similarity --> IP
+
+    Money --> MF
+
+    Custom --> CP[review-only projection proposal]
+
+    D --> WCC[wcc]
+    C --> LV[louvain]
+    IP --> PR[pagerank]
+    MC --> LV
+    MC --> BT[betweenness]
+    PC --> WCC
+    DR --> PR
+    MF --> BT
+    MF --> PR
+```
+
+## Branch Lifecycle
+
+Each reasoning branch is a small, recoverable investigation unit.
+
+```mermaid
+flowchart LR
+    Spec[BranchSpec] --> Project[ProjectGraph]
+    Project --> Algo[RunAlgorithm]
+    Algo --> Interpret[InterpreterAgent]
+    Interpret --> Claim[StructuralClaim]
+    Claim --> Verify[VerifyCypher]
+    Verify --> Evidence[StructuralEvidence]
+    Evidence --> Drop[DropProjection cleanup]
+
+    Project -. creates .-> Temp[(temporary GDS projection)]
+    Algo -. reads .-> Temp
+    Drop -. removes .-> Temp
+```
+
+## Repository Layout
+
+```text
+src/
+  activities/       Temporal activities for parse, plan, project, run, verify, synthesize
+  agents/           PydanticAI agents and rule-based fallbacks
+  contracts/        Pydantic data contracts
+  gds/              Neo4j driver, projection library, algorithm library
+  verifiers/        Deterministic Cypher verification templates
+  workflows/        Temporal workflows for investigations and branches
+  client.py         CLI/API entrypoint for submitting hypotheses
+  worker.py         Temporal worker entrypoint
+  metrics.py        Activity and token instrumentation
+
+tests/
+  fixtures/         Synthetic fraud graph seed data
+  test_*.py         Projection, algorithm, verifier, agent, workflow, and eval tests
+
+evals/
+  scenarios.yaml    Demo scenarios and expected outcomes
+  run_eval.py       Evaluation harness
+  ablations.py      Ablation study runner
+```
+
+For a compact command runbook, see [RUN.md](RUN.md).
+
+## Prerequisites
+
+- Python 3.12 or newer. The local runbook examples use `py -3.13` on Windows.
+- Temporal CLI for `temporal server start-dev`.
+- Neo4j 5 with the Graph Data Science plugin enabled.
+- An Anthropic API key for LLM mode.
+
+The agents have deterministic fallback paths, but normal LLM mode expects
+`ANTHROPIC_API_KEY` to be set.
 
 ## Setup
 
-### Prerequisites
+Create a virtual environment and install the project dependencies:
 
-- Python 3.12+
-- Neo4j 5+ with GDS 2026.03
-- Temporal Server
-- Ollama (with `qwen3:4b` model pulled)
-
-### Installation
-
-```bash
-# Clone and activate venv
-python -m venv .venv
-source .venv/bin/activate  # Windows: .venv\Scripts\activate
-
-# Install dependencies
-pip install -e .
-pip install -e '.[dev]'
+```powershell
+py -3.13 -m venv .venv
+.\.venv\Scripts\Activate.ps1
+py -3.13 -m pip install -e .
+py -3.13 -m pip install -e ".[dev]"
 ```
 
-### Configuration
+On macOS or Linux, use the same commands with `python` and
+`source .venv/bin/activate`.
 
-Copy the provided `.env` file and adjust for your environment:
+Create or update `.env`:
 
-```bash
+```dotenv
 # Neo4j
 NEO4J_URI=bolt://localhost:7687
 NEO4J_USER=neo4j
@@ -75,256 +206,222 @@ TEMPORAL_HOST=localhost:7233
 TEMPORAL_NAMESPACE=default
 TEMPORAL_TASK_QUEUE=fraud-agent
 
-# Ollama
-OLLAMA_URL=http://localhost:11434/v1
-OLLAMA_MODEL=qwen3:4b
-OLLAMA_NUM_PARALLEL=4
+# LLM agents
+ANTHROPIC_API_KEY=your-api-key
+ANTHROPIC_MODEL=claude-sonnet-4-6
+
+# Optional controls
+MAX_BRANCHES=3
+ROUTER_MODE=llm
+PLANNER_MODE=llm
+INTERPRETER_MODE=llm
+VERIFIER_MODE=llm
+SYNTHESIZER_MODE=llm
+COMPOSER_MODE=llm
+ALLOW_COMPOSER_AUTOEXEC=false
 ```
 
-### Local Services
+Set any agent mode to `rule-based` to force deterministic fallback behavior for
+that component.
 
-```bash
-# Terminal 1: Temporal Server
+## Run Locally
+
+Start Temporal:
+
+```powershell
 temporal server start-dev
-
-# Terminal 2: Neo4j (Docker)
-docker run --rm -d \
-  -p 7687:7687 \
-  -e NEO4J_AUTH=neo4j/changeme \
-  -e NEO4J_PLUGINS='["graph-data-science"]' \
-  neo4j:5-enterprise
-
-# Terminal 3: Ollama
-ollama serve
-
-# Terminal 4: Seed the graph (optional, for testing)
-neo4j-cli cypher -f tests/fixtures/graph_seed.cypher
 ```
 
-## Running
+Start Neo4j with GDS enabled. You can use Neo4j Desktop or a Docker-based Neo4j
+instance, as long as the credentials match `.env`.
 
-### Start the Worker
+Start the worker from the repository root:
 
-```bash
-python -m src.worker
+```powershell
+py -3.13 src/worker.py
 ```
 
-This starts a Temporal worker that listens on the configured task queue and executes workflows.
+Submit a hypothesis in another terminal:
 
-### Submit a Hypothesis
-
-```bash
-python -m src.client --hypothesis "Collusion ring: customers C1 and C2 share device D5"
+```powershell
+py -3.13 src/client.py --hypothesis "Urgent review of a collusion ring where customers C1_1 and C1_2 appear to share the same device."
 ```
 
-Or via Python API:
+Return JSON instead of the pretty-printed verdict:
 
-```python
-from src.client import submit_investigation
-
-verdict = submit_investigation(
-    hypothesis="Unusual routing pattern across ACQ_1 and ACQ_2",
-    trace_id="demo-001"
-)
-print(verdict)
+```powershell
+py -3.13 src/client.py --hypothesis "Investigate payment decline routing anomalies across acquirers." --json
 ```
 
-### Run Tests
+Temporal's local web UI is available at <http://localhost:8233> while the dev
+server is running.
 
-```bash
-# All tests
-pytest tests/
+## Seed Data And Evaluations
 
-# Specific test suite
-pytest tests/test_projections.py -v
-pytest tests/test_workflow_investigation.py -v
+The evaluation harness clears Neo4j, loads
+[tests/fixtures/graph_seed.cypher](tests/fixtures/graph_seed.cypher), runs the
+demo scenarios, and writes a report.
 
-# With coverage
-pytest tests/ --cov=src --cov-report=term-missing
+```powershell
+make eval
 ```
 
-## Project Structure
+Equivalent direct command:
 
-```
-src/
-├── contracts/           # Data models (Pydantic)
-│   ├── hypothesis.py   # Input: claim type, scope, urgency
-│   ├── branch.py       # Branch specs, structural claims
-│   └── verdict.py      # Output: final fraud verdict
-├── gds/                 # Neo4j + GDS integration
-│   ├── driver.py       # Neo4j session management
-│   ├── projections.py  # 7 pre-registered graph projections
-│   └── algorithms.py   # 6 graph algorithms (WCC, Louvain, PageRank, etc)
-├── agents/              # LLM agents (PydanticAI + Ollama)
-│   ├── router.py       # Classify hypothesis
-│   ├── planner.py      # Plan investigation branches
-│   ├── interpreter.py  # Interpret algorithm output
-│   ├── verifier.py     # Select verification template
-│   ├── synthesizer.py  # Analyst-facing summary
-│   ├── composer.py     # Novel projection proposals (CUSTOM claims)
-│   └── stubs.py        # Fallback logic when LLM unavailable
-├── verifiers/           # Deterministic verification
-│   └── templates.py    # Parameterized Cypher verification templates
-├── activities/          # Temporal activities (deterministic units of work)
-│   ├── parse.py        # Parse raw hypothesis text
-│   ├── plan.py         # Branch planning
-│   ├── project.py      # Create graph projections
-│   ├── run_algo.py     # Execute GDS algorithms
-│   ├── interpret.py    # Interpret results with agent
-│   ├── verify.py       # Verify with Cypher
-│   ├── aggregate.py    # Consensus logic
-│   ├── synthesize.py   # Final verdict
-│   └── compose.py      # Compose custom projections
-├── workflows/           # Temporal workflows
-│   ├── investigation.py # Top-level orchestration
-│   └── branch.py       # Parallel investigation branch
-├── worker.py           # Temporal worker entrypoint
-├── client.py           # CLI / API client
-└── metrics.py          # Activity instrumentation
-
-tests/
-├── fixtures/
-│   └── graph_seed.cypher   # Synthetic fraud dataset
-├── test_projections.py     # Projection correctness
-├── test_algorithms.py      # Algorithm results
-├── test_verifiers.py       # Verification templates
-├── test_agents.py          # Agent routing
-├── test_workflow_*.py      # Workflow orchestration
-└── test_eval_harness.py    # Evaluation framework
-
-evals/
-├── scenarios.yaml      # 3 demo scenarios (shared_device_ring, merchant_cochargeback, decline_routing)
-├── run_eval.py        # Evaluation harness
-└── ablations.py       # Ablation testing for ICTAI paper
+```powershell
+py -3.13 evals/run_eval.py --output evals/reports/latest.json
 ```
 
-## Key Abstractions
+Run one or more ablation studies:
 
-### Projections Library (§4, CLAUDE.md)
+```powershell
+py -3.13 evals/ablations.py baseline no_gds_verifier
+py -3.13 evals/ablations.py --all
+py -3.13 evals/ablations.py baseline --temp 0.0 0.3 0.5 0.7
+```
 
-Pre-registered graph subsets. The router picks by ID; no freeform Cypher from the LLM.
+Available predefined ablations include `baseline`, `no_gds_verifier`,
+`no_cypher_verifier`, `single_branch`, `router_rule_based`,
+`planner_rule_based`, `minimal_algo_set`, and `composer_always`.
 
-| ID | Signal |
-|---|---|
-| `shared_device_ring` | Customers sharing devices (collusion rings) |
-| `shared_card_ring` | Customers sharing cards (account takeover) |
-| `ip_cohort` | Customers from same IP (bot farms) |
+## Test
+
+Most tests require Neo4j with GDS because they build projections and execute GDS
+procedures.
+
+```powershell
+py -3.13 -m pytest tests/ -v
+```
+
+Useful milestone slices:
+
+```powershell
+py -3.13 -m pytest tests/test_projections.py tests/test_algorithms.py -v
+py -3.13 -m pytest tests/test_verifiers.py -v
+py -3.13 -m pytest tests/test_workflow_branch.py -v
+py -3.13 -m pytest tests/test_branch_agents.py -v
+py -3.13 -m pytest tests/test_agents.py -v
+py -3.13 -m pytest tests/test_workflow_investigation.py -v
+py -3.13 -m pytest tests/test_composer.py tests/test_workflow_custom.py -v
+py -3.13 -m pytest tests/test_eval_harness.py -v
+```
+
+## Claim Types
+
+| Claim type | Purpose |
+| --- | --- |
+| `ring` | Collusion rings, shared devices, shared cards, and IP cohorts |
+| `chargeback` | Merchant dispute or loss clusters |
+| `routing` | Decline-routing and acquirer anomalies |
+| `similarity` | Entity lookalike or behavioral similarity checks |
+| `money_flow` | Settlement paths and funds-flow bottlenecks |
+| `custom` | Review-only custom projection proposals |
+
+## Projection Catalog
+
+| Projection ID | Signal |
+| --- | --- |
+| `shared_device_ring` | Customers sharing devices |
+| `shared_card_ring` | Customers sharing cards |
+| `ip_cohort` | Customers from the same IP |
 | `merchant_cochargeback` | Merchants sharing charged-back customers |
-| `money_flow` | Settlement paths (acquirer → issuer) |
-| `payout_cluster` | Merchant → payout account → country |
+| `money_flow` | Settlement paths across payment entities |
+| `payout_cluster` | Merchant, payout account, and country clusters |
 | `decline_routing` | Acquirer decline patterns |
 
-### Algorithm Library (§5, CLAUDE.md)
-
-Graph algorithms applied to projections. Each projection has a pre-approved set of compatible algorithms.
+## Algorithm Catalog
 
 | Algorithm | Use |
-|---|---|
-| `wcc` | Hard connected components (rings) |
-| `louvain` | Soft community detection |
-| `pagerank` | Entity centrality / importance |
-| `node_similarity` | Embedding-based lookalike detection |
-| `betweenness` | Bottleneck / bridge entities |
-| `fastrp_knn` | Fast random projection + KNN |
+| --- | --- |
+| `wcc` | Hard connected components and rings |
+| `louvain` | Community detection |
+| `pagerank` | Entity importance and routing influence |
+| `node_similarity` | Lookalike detection |
+| `betweenness` | Bottleneck and bridge entities |
+| `fastrp_knn` | FastRP embedding plus nearest-neighbor search |
 
-### Verification Templates (§2, CLAUDE.md)
+The allowed projection-to-algorithm mapping lives in
+[src/gds/algorithms.py](src/gds/algorithms.py).
 
-Deterministic Cypher probes that verify structural claims. Each template is parameterized and returns AGREE | DISAGREE | NOT_APPLICABLE.
+## Verification Templates
 
-Examples:
-- `confirm_component`: verify nodes are in the same WCC/Louvain component
-- `confirm_money_flow_path`: verify a settlement path exists
-- `confirm_decline_routing`: verify an acquirer's decline anomaly
+Verification is handled by fixed Cypher probes in
+[src/verifiers/templates.py](src/verifiers/templates.py). Templates return
+structured outcomes such as `AGREE`, `DISAGREE`, or `NOT_APPLICABLE`.
 
-## Development
+Current templates include:
 
-### Adding a New Projection
+- `confirm_component`
+- `confirm_merchant_cochargeback`
+- `confirm_payout_cluster`
+- `confirm_money_flow_path`
+- `confirm_decline_routing`
 
-1. Add a function to `src/gds/projections.py` with signature `def project_X(session, **params) -> ProjectionHandle`
-2. Register it in the projection library dict
-3. Add unit test in `tests/test_projections.py` with known output on synthetic data
-4. Update the catalog in §5 of CLAUDE.md
+## Development Notes
 
-### Adding a New Algorithm
+Add a new projection:
 
-1. Implement in `src/gds/algorithms.py` with signature `def run_X(handle, **params) -> list[dict]`
-2. Add to the algorithm library dict
-3. Update the projection-to-algorithm mapping in §5
-4. Add unit test
+1. Implement the projection in [src/gds/projections.py](src/gds/projections.py).
+2. Register it in the projection library.
+3. Add or update compatible algorithms in [src/gds/algorithms.py](src/gds/algorithms.py).
+4. Add tests in [tests/test_projections.py](tests/test_projections.py).
 
-### Adding a New Verification Template
+Add a new algorithm:
 
-1. Create a Cypher probe in `src/verifiers/templates.py`
-2. Test against known true claims on the synthetic dataset
-3. Update the verifier agent to map `StructuralClaim` shapes to template IDs
+1. Implement the runner in [src/gds/algorithms.py](src/gds/algorithms.py).
+2. Add it to the projection-to-algorithm catalog.
+3. Add tests in [tests/test_algorithms.py](tests/test_algorithms.py).
 
-### Running Evaluations
+Add a new verifier:
 
-```bash
-# Run all 3 demo scenarios
-python evals/run_eval.py
+1. Add a parameterized Cypher template in
+   [src/verifiers/templates.py](src/verifiers/templates.py).
+2. Map compatible structural claims to the template.
+3. Add tests in [tests/test_verifiers.py](tests/test_verifiers.py).
 
-# Run with ablations
-python evals/ablations.py --ablate-gds-verifier
-python evals/ablations.py --ablate-cypher-verifier
-python evals/ablations.py --max-branches=1
+Custom projection composition is review-first. Keep
+`ALLOW_COMPOSER_AUTOEXEC=false` unless you explicitly want composer proposals to
+be executed during a controlled experiment.
+
+## Troubleshooting
+
+`ModuleNotFoundError: No module named 'activities'`
+
+Run the worker as a script from the repository root:
+
+```powershell
+py -3.13 src/worker.py
 ```
 
-See [CLAUDE.md §11](CLAUDE.md#11-ablation-hooks-for-the-ictai-paper) for all available ablation flags.
+`ANTHROPIC_API_KEY` is missing
 
-## Testing Strategy
+Set `ANTHROPIC_API_KEY` in `.env`, or force relevant agents to `rule-based`
+mode while developing deterministic paths.
 
-The build follows a strict milestone-based order ([CLAUDE.md §10](CLAUDE.md#10-build-order-strict)):
+Client returns low-confidence or empty results
 
-- **M0**: Data contracts + projection/algorithm libraries (deterministic)
-- **M1**: Full GDS library with unit tests
-- **M2**: Verifier templates with CoVe validation
-- **M3**: Single-branch workflow (no LLM)
-- **M4**: Router + planner agents
-- **M5**: Interpreter + verifier agents
-- **M6**: Top-level orchestration + synthesizer
-- **M7**: Composer agent (CUSTOM claims)
-- **M8**: Evaluation harness
+The Neo4j graph may be empty. Run the evaluation harness once to reseed:
 
-Run tests at each milestone to ensure stability before proceeding.
-
-```bash
-# Green tests are required to proceed
-pytest tests/test_projections.py tests/test_algorithms.py        # M0
-pytest tests/test_catalog.py                                     # M1
-pytest tests/test_verifiers.py                                   # M2
-pytest tests/test_workflow_branch.py                             # M3
-pytest tests/test_branch_agents.py                               # M4
-pytest tests/test_agents.py                                      # M5
-pytest tests/test_workflow_investigation.py                      # M6
-pytest tests/test_composer.py                                    # M7
-pytest evals/run_eval.py                                         # M8
+```powershell
+make eval
 ```
 
-## Design Principles
+Temporal client times out
 
-1. **Algorithm-first reasoning**: GDS algorithms are the primary inference primitives
-2. **Dual verification**: Semantic (Cypher) + structural (GDS) both verify claims
-3. **Pre-registered libraries**: No LLM composition of graph code; use fixed projections and templates
-4. **Explicit projection lifecycle**: All projections have try/finally guards to prevent OOM
-5. **Type-safe payloads**: All cross-activity data is Pydantic-validated
-6. **Ablation-ready**: Every reasoning component has an off-switch for research evaluation
+Make sure `temporal server start-dev` and `py -3.13 src/worker.py` are both
+running, and that `TEMPORAL_TASK_QUEUE` matches in both processes.
 
-## Non-Goals
+Neo4j authentication fails
 
-- General-purpose Cypher writing by the LLM (use ProjectionComposerAgent for review-only proposals)
-- Training data collection from production runs without opt-in
-- UI (analyst interface is separate)
-- Multi-tenant isolation (single-tenant with run_id scoping)
-- Runtime model swapping (fixed to Qwen 3.5 4B for this submission)
+Check that `NEO4J_USER` and `NEO4J_PASSWORD` in `.env` match the running Neo4j
+database.
 
 ## References
 
-- Design spec: [CLAUDE.md](CLAUDE.md)
-- Papers / context: ICTAI submission (fraud detection via graph reasoning)
-- GDS docs: https://neo4j.com/docs/graph-data-science/current/
-- Temporal docs: https://docs.temporal.io/
-- PydanticAI docs: https://ai.pydantic.dev/
+- [Temporal documentation](https://docs.temporal.io/)
+- [Neo4j Graph Data Science documentation](https://neo4j.com/docs/graph-data-science/current/)
+- [PydanticAI documentation](https://ai.pydantic.dev/)
+- [Runbook](RUN.md)
 
 ## License
 
